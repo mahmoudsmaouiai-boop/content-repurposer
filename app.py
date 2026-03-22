@@ -15,6 +15,9 @@ app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = os.environ.get("UPLOAD_FOLDER", "/tmp/content-repurposer-uploads")
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB limit for audio/video
 
+# Create upload dir at startup — must run under gunicorn too, not just __main__
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
 ALLOWED_EXTENSIONS = {"txt", "md", "pdf"}
 ALLOWED_AUDIO_EXTENSIONS = {"mp4", "mp3", "wav", "m4a"}
 
@@ -93,20 +96,21 @@ def repurpose():
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
-    if "file" not in request.files or not request.files["file"].filename:
-        return jsonify({"error": "No file provided."}), 400
-
-    file = request.files["file"]
-    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-
-    if ext not in ALLOWED_AUDIO_EXTENSIONS:
-        return jsonify({"error": f"Unsupported file type '.{ext}'. Allowed: mp4, mp3, wav, m4a."}), 400
-
-    filename = secure_filename(f"{uuid.uuid4()}_{file.filename}")
-    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-    file.save(filepath)
-
+    filepath = None
     try:
+        if "file" not in request.files or not request.files["file"].filename:
+            return jsonify({"error": "No file provided."}), 400
+
+        file = request.files["file"]
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+
+        if ext not in ALLOWED_AUDIO_EXTENSIONS:
+            return jsonify({"error": f"Unsupported file type '.{ext}'. Allowed: mp4, mp3, wav, m4a."}), 400
+
+        filename = secure_filename(f"{uuid.uuid4()}_{file.filename}")
+        filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        file.save(filepath)
+
         with open(filepath, "rb") as audio_file:
             response = openai_client.audio.transcriptions.create(
                 model="whisper-1",
@@ -115,10 +119,11 @@ def transcribe():
         return jsonify({"transcript": response.text})
 
     except Exception as e:
-        return jsonify({"error": f"Transcription failed: {str(e)}"}), 500
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
     finally:
-        if os.path.exists(filepath):
+        if filepath and os.path.exists(filepath):
             os.remove(filepath)
 
 
