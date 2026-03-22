@@ -174,7 +174,9 @@ def generate():
         if not transcript:
             return jsonify({"error": "No transcript provided."}), 400
 
-        message = client.messages.create(
+        # Use streaming so gunicorn stays active during the long API call
+        chunks = []
+        with client.messages.stream(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
             messages=[
@@ -183,8 +185,11 @@ def generate():
                     "content": GENERATE_PROMPT + transcript,
                 }
             ],
-        )
-        raw = message.content[0].text.strip()
+        ) as stream:
+            for text in stream.text_stream:
+                chunks.append(text)
+
+        raw = "".join(chunks).strip()
 
         # Strip accidental markdown code fences if Claude adds them
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
