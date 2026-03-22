@@ -123,45 +123,116 @@ def transcribe():
 
 
 GENERATE_PROMPT = """\
-You are a professional content strategist. Given the transcript below, generate platform-optimized content for every format listed. You MUST return ONLY a valid JSON object — no markdown, no code fences, no explanation — with exactly these five keys:
+You are a professional content strategist. Given the transcript below, generate platform-optimized content using EXACTLY the section headers and item separators shown. Output plain text only — no JSON, no markdown, no code fences, no extra commentary.
 
-{
-  "linkedin": [
-    {"post": "..."},
-    {"post": "..."},
-    {"post": "..."}
-  ],
-  "twitter": [
-    {"thread": ["tweet 1", "tweet 2", "..."]},
-    {"thread": ["tweet 1", "tweet 2", "..."]},
-    {"thread": ["tweet 1", "tweet 2", "..."]},
-    {"thread": ["tweet 1", "tweet 2", "..."]},
-    {"thread": ["tweet 1", "tweet 2", "..."]}
-  ],
-  "newsletter": {
-    "subject": "...",
-    "section": "..."
-  },
-  "instagram": [
-    {"caption": "..."},
-    {"caption": "..."},
-    {"caption": "..."}
-  ],
-  "blog": {
-    "title": "...",
-    "summary": "..."
-  }
-}
+=== LINKEDIN ===
+--- POST 1 ---
+[write LinkedIn post 1 here]
+--- POST 2 ---
+[write LinkedIn post 2 here]
+--- POST 3 ---
+[write LinkedIn post 3 here]
 
-Rules per format:
-- linkedin: 3 distinct posts, professional tone, hook in first line, short paragraphs, 3–5 hashtags each.
-- twitter: 5 separate threads, each thread is an array of tweets (3–7 tweets), each tweet ≤ 280 chars, numbered (1/, 2/, …), relevant emojis, ends with a CTA.
-- newsletter: 1 newsletter section with a compelling subject line and well-structured body (intro, key points, takeaway).
-- instagram: 3 captions, conversational, emojis, 10–15 hashtags at the end of each.
-- blog: title + 150–250 word summary suitable as an intro or meta-description.
+=== TWITTER ===
+--- THREAD 1 ---
+[TWEET] [write tweet 1 here]
+[TWEET] [write tweet 2 here]
+[TWEET] [write tweet 3 here]
+--- THREAD 2 ---
+[TWEET] [write tweet 1 here]
+[TWEET] [write tweet 2 here]
+[TWEET] [write tweet 3 here]
+--- THREAD 3 ---
+[TWEET] [write tweet 1 here]
+[TWEET] [write tweet 2 here]
+--- THREAD 4 ---
+[TWEET] [write tweet 1 here]
+[TWEET] [write tweet 2 here]
+--- THREAD 5 ---
+[TWEET] [write tweet 1 here]
+[TWEET] [write tweet 2 here]
+
+=== NEWSLETTER ===
+SUBJECT: [subject line here]
+[newsletter body here]
+
+=== INSTAGRAM ===
+--- CAPTION 1 ---
+[write caption 1 here]
+--- CAPTION 2 ---
+[write caption 2 here]
+--- CAPTION 3 ---
+[write caption 3 here]
+
+=== BLOG ===
+TITLE: [blog title here]
+[blog summary here]
+
+Rules:
+- linkedin: 3 distinct posts, professional tone, hook in first line, short paragraphs, 3-5 hashtags each.
+- twitter: 5 threads of 3-6 tweets each. Each tweet <= 280 chars, numbered (1/, 2/, ...), emojis, last tweet is a CTA.
+- newsletter: compelling subject line on the SUBJECT: line, then a structured body with intro, key points, takeaway.
+- instagram: conversational, emojis throughout, 10-15 hashtags at the very end.
+- blog: title on the TITLE: line, then a 150-250 word summary suitable as a meta-description.
 
 TRANSCRIPT:
 """
+
+
+def parse_sections(raw):
+    """Parse Claude's delimiter-separated response into a structured dict."""
+
+    def extract_section(text, header):
+        m = re.search(
+            rf"===\s*{header}\s*===\s*(.*?)(?=\n===\s*[A-Z]+\s*===|\Z)",
+            text, re.DOTALL | re.IGNORECASE,
+        )
+        return m.group(1).strip() if m else ""
+
+    def split_named_items(text, prefix):
+        parts = re.split(rf"---\s*{prefix}\s*\d+\s*---", text, flags=re.IGNORECASE)
+        return [p.strip() for p in parts if p.strip()]
+
+    # LinkedIn — 3 posts
+    li_raw = extract_section(raw, "LINKEDIN")
+    linkedin = [{"post": p} for p in split_named_items(li_raw, "POST")] or [{"post": li_raw}]
+
+    # Twitter — 5 threads, each containing [TWEET] markers
+    tw_raw = extract_section(raw, "TWITTER")
+    threads_raw = split_named_items(tw_raw, "THREAD")
+    twitter = []
+    for thread_text in threads_raw:
+        tweets = [t.strip() for t in re.split(r"\[TWEET\]", thread_text) if t.strip()]
+        if tweets:
+            twitter.append({"thread": tweets})
+
+    # Newsletter — SUBJECT: line + body
+    nl_raw = extract_section(raw, "NEWSLETTER")
+    nl_match = re.match(r"SUBJECT:\s*(.+?)[\r\n]+(.*)", nl_raw, re.DOTALL | re.IGNORECASE)
+    if nl_match:
+        newsletter = {"subject": nl_match.group(1).strip(), "section": nl_match.group(2).strip()}
+    else:
+        newsletter = {"subject": "", "section": nl_raw}
+
+    # Instagram — 3 captions
+    ig_raw = extract_section(raw, "INSTAGRAM")
+    instagram = [{"caption": c} for c in split_named_items(ig_raw, "CAPTION")] or [{"caption": ig_raw}]
+
+    # Blog — TITLE: line + summary
+    bl_raw = extract_section(raw, "BLOG")
+    bl_match = re.match(r"TITLE:\s*(.+?)[\r\n]+(.*)", bl_raw, re.DOTALL | re.IGNORECASE)
+    if bl_match:
+        blog = {"title": bl_match.group(1).strip(), "summary": bl_match.group(2).strip()}
+    else:
+        blog = {"title": "", "summary": bl_raw}
+
+    return {
+        "linkedin":   linkedin,
+        "twitter":    twitter,
+        "newsletter": newsletter,
+        "instagram":  instagram,
+        "blog":       blog,
+    }
 
 
 @app.route("/generate", methods=["POST"])
@@ -190,18 +261,9 @@ def generate():
                 chunks.append(text)
 
         raw = "".join(chunks).strip()
+        print("[generate] raw response length:", len(raw))
 
-        # Strip accidental markdown code fences if Claude adds them
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-
-        result = json.loads(raw)
-
-        required_keys = {"linkedin", "twitter", "newsletter", "instagram", "blog"}
-        missing = required_keys - result.keys()
-        if missing:
-            return jsonify({"error": f"Model response missing keys: {missing}", "raw": raw}), 500
-
+        result = parse_sections(raw)
         return jsonify(result)
 
     except Exception as e:
