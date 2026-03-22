@@ -19,7 +19,8 @@ app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB limit for audio/v
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"txt", "md", "pdf"}
-ALLOWED_AUDIO_EXTENSIONS = {"mp4", "mp3", "wav", "m4a"}
+ALLOWED_AUDIO_EXTENSIONS = {"mp3", "wav", "m4a", "ogg", "flac", "aac"}
+VIDEO_EXTENSIONS = {"mp4", "mov", "avi", "mkv", "webm"}
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -104,8 +105,10 @@ def transcribe():
         file = request.files["file"]
         ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
 
+        if ext in VIDEO_EXTENSIONS:
+            return jsonify({"error": f"Video files are not supported. Please extract the audio track first and upload an audio file (mp3, wav, m4a, ogg, flac, aac)."}), 400
         if ext not in ALLOWED_AUDIO_EXTENSIONS:
-            return jsonify({"error": f"Unsupported file type '.{ext}'. Allowed: mp4, mp3, wav, m4a."}), 400
+            return jsonify({"error": f"Unsupported file type '.{ext}'. Allowed: mp3, wav, m4a, ogg, flac, aac."}), 400
 
         filename = secure_filename(f"{uuid.uuid4()}_{file.filename}")
         filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
