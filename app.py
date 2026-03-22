@@ -2,6 +2,7 @@ import os
 import re
 import json
 import uuid
+import traceback
 from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
@@ -165,13 +166,14 @@ TRANSCRIPT:
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    data = request.get_json(silent=True) or {}
-    transcript = data.get("transcript", "").strip()
-
-    if not transcript:
-        return jsonify({"error": "No transcript provided."}), 400
-
+    raw = ""
     try:
+        data = request.get_json(silent=True) or {}
+        transcript = data.get("transcript", "").strip()
+
+        if not transcript:
+            return jsonify({"error": "No transcript provided."}), 400
+
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -197,10 +199,9 @@ def generate():
 
         return jsonify(result)
 
-    except json.JSONDecodeError as e:
-        return jsonify({"error": f"Model returned invalid JSON: {str(e)}", "raw": raw}), 500
-    except anthropic.APIError as e:
-        return jsonify({"error": f"Anthropic API error: {str(e)}"}), 500
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "raw": raw}), 500
 
 
 if __name__ == "__main__":
